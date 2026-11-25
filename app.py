@@ -2,10 +2,10 @@ import os
 import requests
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-# آدرس ۳ ورکر هوش مصنوعی (در صورت تغییر آدرس تونل، این مقادیر را تغییر دهید)
+# آدرس ۳ سرور ابری فعال کولب
 WORKERS = {
     "W1": os.getenv("WORKER_1", "https://arvix-ai-studio.loca.lt"),
     "W2": os.getenv("WORKER_2", "https://arvix-post-worker.loca.lt"),
@@ -14,7 +14,7 @@ WORKERS = {
 
 PROXY_HEADERS = {
     "Bypass-Tunnel-Reminder": "true",
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
 
 app = FastAPI(title="Arvix Central AI Hub")
@@ -27,41 +27,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def safe_proxy_request(target_url: str, payload: dict, timeout: int = 120):
+    """ارسال ایمن درخواست با مدیریت کامل خطاهای شبکه و تایم‌اوت"""
+    try:
+        res = requests.post(target_url, json=payload, headers=PROXY_HEADERS, timeout=timeout)
+        
+        # اگر سرور مقصد به جای JSON صفحه HTML یا ارور داد
+        try:
+            return res.json()
+        except Exception:
+            return JSONResponse(
+                status_code=502,
+                content={"status": "error", "detail": f"سرور کولب پاسخ معتبر نداد (احتمالاً صفحه لوکال‌تونل یا خطای داخلی ورکر): {res.text[:250]}"}
+            )
+            
+    except requests.exceptions.ConnectionError:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "detail": f"عدم اتصال به سرور کولب در آدرس {target_url} - لطفاً از روشن بودن ران‌تایم کولب و فعال بودن تونل مطمئن شوید."}
+        )
+    except requests.exceptions.Timeout:
+        return JSONResponse(
+            status_code=504,
+            content={"status": "error", "detail": f"پایان مهلت زمانی (Timeout) در اتصال به {target_url}"}
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)}
+        )
+
+# مسیرهای پروکسی
 @app.post("/api/generate-image")
 async def proxy_t2i(req: Request):
     data = await req.json()
-    res = requests.post(f"{WORKERS['W1']}/generate-image", json=data, headers=PROXY_HEADERS, timeout=90)
-    return res.json()
+    return safe_proxy_request(f"{WORKERS['W1']}/generate-image", data, timeout=90)
 
 @app.post("/api/text-to-video")
 async def proxy_t2v(req: Request):
     data = await req.json()
-    res = requests.post(f"{WORKERS['W1']}/text-to-video", json=data, headers=PROXY_HEADERS, timeout=300)
-    return res.json()
+    return safe_proxy_request(f"{WORKERS['W1']}/text-to-video", data, timeout=300)
 
 @app.post("/api/composite-tracked-video")
 async def proxy_tracker(req: Request):
     data = await req.json()
-    res = requests.post(f"{WORKERS['W3']}/composite-tracked-video", json=data, headers=PROXY_HEADERS, timeout=360)
-    return res.json()
+    return safe_proxy_request(f"{WORKERS['W3']}/composite-tracked-video", data, timeout=360)
 
 @app.post("/api/text-to-speech")
 async def proxy_tts(req: Request):
     data = await req.json()
-    res = requests.post(f"{WORKERS['W2']}/text-to-speech", json=data, headers=PROXY_HEADERS, timeout=60)
-    return res.json()
+    return safe_proxy_request(f"{WORKERS['W2']}/text-to-speech", data, timeout=60)
 
 @app.post("/api/transcribe-subtitle")
 async def proxy_whisper(req: Request):
     data = await req.json()
-    res = requests.post(f"{WORKERS['W2']}/transcribe-subtitle", json=data, headers=PROXY_HEADERS, timeout=120)
-    return res.json()
+    return safe_proxy_request(f"{WORKERS['W2']}/transcribe-subtitle", data, timeout=120)
 
 @app.post("/api/upscale-image")
 async def proxy_upscale(req: Request):
     data = await req.json()
-    res = requests.post(f"{WORKERS['W2']}/upscale-image", json=data, headers=PROXY_HEADERS, timeout=120)
-    return res.json()
+    return safe_proxy_request(f"{WORKERS['W2']}/upscale-image", data, timeout=120)
 
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -100,9 +125,9 @@ HTML_PAGE = """<!DOCTYPE html>
 <body>
     <div class="container">
         <div class="header">
-            <span class="badge">Koyeb Cloud Edition</span>
+            <span class="badge">Render Gateway Live</span>
             <h1>استودیو ابری مدیا و کامپوزیت سینمایی</h1>
-            <p style="color:var(--sub); font-size:14px;">ارتباط سرور-به-سرور امن بدون نیاز به تونل در فرانت‌اند</p>
+            <p style="color:var(--sub); font-size:14px;">ارتباط سرور-به-سرور امن بدون خطای CORS</p>
         </div>
 
         <div class="tabs">
@@ -113,7 +138,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <button class="tab-btn" onclick="setTab(event, 'tab-up')">💎 ارتقای 4K لوکنتراست</button>
         </div>
 
-        <!-- تب ۱: ویدیو و عکس -->
+        <!-- تب ۱ -->
         <div id="tab-video" class="tab-content active">
             <div class="card">
                 <h3>تولید تصویر رفرنس و رندر ویدیوی سینمایی</h3>
@@ -127,7 +152,7 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- تب ۲: ترکینگ -->
+        <!-- تب ۲ -->
         <div id="tab-track" class="tab-content">
             <div class="card">
                 <h3>ترکینگ پلان متحرک و کروماکی لوکنتراست</h3>
@@ -156,7 +181,7 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- تب ۳: نریشن -->
+        <!-- تب ۳ -->
         <div id="tab-tts" class="tab-content">
             <div class="card">
                 <h3>نریشن و گوینده تبلیغاتی</h3>
@@ -179,7 +204,7 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- تب ۴: زیرنویس -->
+        <!-- تب ۴ -->
         <div id="tab-whisper" class="tab-content">
             <div class="card">
                 <h3>استخراج زیرنویس SRT هماهنگ (Whisper)</h3>
@@ -190,7 +215,7 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- تب ۵: ارتقای 4K -->
+        <!-- تب ۵ -->
         <div id="tab-up" class="tab-content">
             <div class="card">
                 <h3>ارتقای 4K و گریدینگ سینمایی فلت</h3>
@@ -209,7 +234,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <div style="background:#1e293b; padding:30px; border-radius:20px; text-align:center;">
             <div class="spinner"></div>
             <h4 id="load_t" style="margin:0 0 8px;">در حال پردازش...</h4>
-            <p id="load_d" style="color:var(--sub); font-size:13px; margin:0;">درخواست در حال انتقال به ورکر مربوطه است.</p>
+            <p id="load_d" style="color:var(--sub); font-size:13px; margin:0;">درخواست در حال انتقال به ورکر است.</p>
         </div>
     </div>
 
@@ -224,104 +249,113 @@ HTML_PAGE = """<!DOCTYPE html>
         function hideL() { document.getElementById('loading').style.display = 'none'; }
         function toB64(f) { return new Promise((res, rej) => { const r = new FileReader(); r.readAsDataURL(f); r.onload = () => res(r.result.split(',')[1]); r.onerror = rej; }); }
 
+        // تابع استاندارد واکشی دیتا با مدیریت کامل خطاهای شبکه
+        async function postAPI(endpoint, payload) {
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                
+                const text = await res.text();
+                try {
+                    const data = JSON.parse(text);
+                    if (!res.ok) {
+                        alert('⚠️ هشدار سرور: ' + (data.detail || data.message || JSON.stringify(data)));
+                        return null;
+                    }
+                    return data;
+                } catch(err) {
+                    alert('خطای دریافت پاسخ از سرور (احتمالاً ورکر کولب خاموش است):\\n' + text.substring(0, 200));
+                    return null;
+                }
+            } catch(networkErr) {
+                alert('خطای شبکه در ارتباط با رندر: ' + networkErr.message);
+                return null;
+            }
+        }
+
         async function runT2I() {
             const p = document.getElementById('p_in').value.trim();
             if(!p) return alert('پرامپت را وارد کنید.');
-            showL('تولید عکس...', 'پردازش با SDXL-Turbo...');
-            try {
-                const res = await fetch('/api/generate-image', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:p, width:1024, height:1024}) });
-                const d = await res.json();
-                hideL();
-                if(d.status==='success') {
-                    const b = document.getElementById('out_video'); b.style.display='block';
-                    b.innerHTML = `<h4>تصویر خروجی:</h4><img src="data:image/png;base64,${d.image_base64}"><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:image/png;base64,${d.image_base64}" download="ref.png">⬇️ دانلود تصویر</a>`;
-                }
-            } catch(e) { hideL(); alert('خطا: '+e); }
+            showL('تولید عکس...', 'ارسال پرامپت به ورکر ۱...');
+            const d = await postAPI('/api/generate-image', {prompt:p, width:1024, height:1024});
+            hideL();
+            if(d && d.status === 'success') {
+                const b = document.getElementById('out_video'); b.style.display='block';
+                b.innerHTML = `<h4>تصویر خروجی:</h4><img src="data:image/png;base64,${d.image_base64}"><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:image/png;base64,${d.image_base64}" download="ref.png">⬇️ دانلود تصویر</a>`;
+            }
         }
 
         async function runT2V() {
             const p = document.getElementById('p_in').value.trim();
             if(!p) return alert('پرامپت را وارد کنید.');
-            showL('رندر ویدیوی CogVideoX...', 'محاسبه فریم‌ها (حدود ۱ تا ۲ دقیقه)...');
-            try {
-                const res = await fetch('/api/text-to-video', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:p, steps:25}) });
-                const d = await res.json();
-                hideL();
-                if(d.status==='success') {
-                    const b = document.getElementById('out_video'); b.style.display='block';
-                    b.innerHTML = `<h4>ویدیوی سینمایی خروجی:</h4><video controls autoplay loop src="data:video/mp4;base64,${d.video_base64}"></video><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:video/mp4;base64,${d.video_base64}" download="video.mp4">⬇️ دانلود ویدیو</a>`;
-                }
-            } catch(e) { hideL(); alert('خطا: '+e); }
+            showL('رندر ویدیوی CogVideoX...', 'محاسبه فریم‌ها (۱ تا ۲ دقیقه)...');
+            const d = await postAPI('/api/text-to-video', {prompt:p, steps:25});
+            hideL();
+            if(d && d.status === 'success') {
+                const b = document.getElementById('out_video'); b.style.display='block';
+                b.innerHTML = `<h4>ویدیوی سینمایی خروجی:</h4><video controls autoplay loop src="data:video/mp4;base64,${d.video_base64}"></video><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:video/mp4;base64,${d.video_base64}" download="video.mp4">⬇️ دانلود ویدیو</a>`;
+            }
         }
 
         async function runTrack() {
             const v = document.getElementById('t_vid').files[0];
             const bg = document.getElementById('t_bg').files[0];
             if(!v || !bg) return alert('انتخاب هر دو فایل الزامی است.');
-            showL('ترکینگ پلان و کامپوزیت...', 'ردیابی حرکت دوربین و پرداخت سینمایی لوکنتراست...');
-            try {
-                const video_base64 = await toB64(v);
-                const background_image_base64 = await toB64(bg);
-                const bg_blur = parseInt(document.getElementById('t_blur').value);
-                const overscan = parseFloat(document.getElementById('t_over').value);
-                const res = await fetch('/api/composite-tracked-video', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({video_base64, background_image_base64, bg_blur, overscan, max_frames:120}) });
-                const d = await res.json();
-                hideL();
-                if(d.status==='success') {
-                    const b = document.getElementById('out_track'); b.style.display='block';
-                    b.innerHTML = `<h4>ویدیوی نهایی (${d.frames_tracked} فریم ترک‌شده):</h4><video controls autoplay loop src="data:video/mp4;base64,${d.video_base64}"></video><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:video/mp4;base64,${d.video_base64}" download="tracked.mp4">⬇️ دانلود ویدیو</a>`;
-                }
-            } catch(e) { hideL(); alert('خطا: '+e); }
+            showL('ترکینگ پلان و کامپوزیت...', 'پردازش در ورکر ۳...');
+            const video_base64 = await toB64(v);
+            const background_image_base64 = await toB64(bg);
+            const bg_blur = parseInt(document.getElementById('t_blur').value);
+            const overscan = parseFloat(document.getElementById('t_over').value);
+            const d = await postAPI('/api/composite-tracked-video', {video_base64, background_image_base64, bg_blur, overscan, max_frames:120});
+            hideL();
+            if(d && d.status === 'success') {
+                const b = document.getElementById('out_track'); b.style.display='block';
+                b.innerHTML = `<h4>ویدیوی نهایی (${d.frames_tracked} فریم ترک‌شده):</h4><video controls autoplay loop src="data:video/mp4;base64,${d.video_base64}"></video><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:video/mp4;base64,${d.video_base64}" download="tracked.mp4">⬇️ دانلود ویدیو</a>`;
+            }
         }
 
         async function runTTS() {
             const text = document.getElementById('tts_in').value.trim();
             const voice = document.getElementById('tts_v').value;
             if(!text) return alert('متن را وارد کنید.');
-            showL('تولید صدای نریشن...', 'مدل Edge-TTS در حال سنتز صوت...');
-            try {
-                const res = await fetch('/api/text-to-speech', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text, voice}) });
-                const d = await res.json();
-                hideL();
-                if(d.status==='success') {
-                    const b = document.getElementById('out_tts'); b.style.display='block';
-                    b.innerHTML = `<h4>فایل صوتی نریشن:</h4><audio controls autoplay src="data:audio/mp3;base64,${d.audio_base64}"></audio><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:audio/mp3;base64,${d.audio_base64}" download="voice.mp3">⬇️ دانلود MP3</a>`;
-                }
-            } catch(e) { hideL(); alert('خطا: '+e); }
+            showL('تولید صدای نریشن...', 'سنتز صوت در ورکر ۲...');
+            const d = await postAPI('/api/text-to-speech', {text, voice});
+            hideL();
+            if(d && d.status === 'success') {
+                const b = document.getElementById('out_tts'); b.style.display='block';
+                b.innerHTML = `<h4>فایل صوتی نریشن:</h4><audio controls autoplay src="data:audio/mp3;base64,${d.audio_base64}"></audio><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:audio/mp3;base64,${d.audio_base64}" download="voice.mp3">⬇️ دانلود MP3</a>`;
+            }
         }
 
         async function runWhisper() {
             const f = document.getElementById('wh_file').files[0];
             if(!f) return alert('فایل را انتخاب کنید.');
-            showL('استخراج زیرنویس...', 'پردازش با Whisper...');
-            try {
-                const audio_base64 = await toB64(f);
-                const res = await fetch('/api/transcribe-subtitle', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({audio_base64}) });
-                const d = await res.json();
-                hideL();
-                if(d.status==='success') {
-                    const b = document.getElementById('out_wh'); b.style.display='block';
-                    const url = URL.createObjectURL(new Blob([d.srt], {type:'text/plain;charset=utf-8'}));
-                    b.innerHTML = `<h4>متن استخراج‌شده:</h4><p style="background:#020617; padding:10px; border-radius:8px;">${d.full_text}</p><a class="btn btn-secondary" href="${url}" download="sub.srt">⬇️ دانلود فایل SRT</a>`;
-                }
-            } catch(e) { hideL(); alert('خطا: '+e); }
+            showL('استخراج زیرنویس...', 'پردازش صوتی با Whisper...');
+            const audio_base64 = await toB64(f);
+            const d = await postAPI('/api/transcribe-subtitle', {audio_base64});
+            hideL();
+            if(d && d.status === 'success') {
+                const b = document.getElementById('out_wh'); b.style.display='block';
+                const url = URL.createObjectURL(new Blob([d.srt], {type:'text/plain;charset=utf-8'}));
+                b.innerHTML = `<h4>متن استخراج‌شده:</h4><p style="background:#020617; padding:10px; border-radius:8px;">${d.full_text}</p><a class="btn btn-secondary" href="${url}" download="sub.srt">⬇️ دانلود فایل SRT</a>`;
+            }
         }
 
         async function runUpscale() {
             const f = document.getElementById('up_file').files[0];
             if(!f) return alert('تصویر را انتخاب کنید.');
-            showL('ارتقای کیفیت 4K...', 'پردازش با Real-ESRGAN...');
-            try {
-                const image_base64 = await toB64(f);
-                const cinematic_mode = document.getElementById('up_cine').checked;
-                const res = await fetch('/api/upscale-image', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({image_base64, cinematic_mode, lift_shadows:0.05, contrast:0.82}) });
-                const d = await res.json();
-                hideL();
-                if(d.status==='success') {
-                    const b = document.getElementById('out_up'); b.style.display='block';
-                    b.innerHTML = `<h4>تصویر 4K لوکنتراست:</h4><img src="data:image/png;base64,${d.image_base64}"><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:image/png;base64,${d.image_base64}" download="4k.png">⬇️ دانلود تصویر</a>`;
-                }
-            } catch(e) { hideL(); alert('خطا: '+e); }
+            showL('ارتقای کیفیت 4K...', 'پردازش با Real-ESRGAN در ورکر ۲...');
+            const image_base64 = await toB64(f);
+            const cinematic_mode = document.getElementById('up_cine').checked;
+            const d = await postAPI('/api/upscale-image', {image_base64, cinematic_mode, lift_shadows:0.05, contrast:0.82});
+            hideL();
+            if(d && d.status === 'success') {
+                const b = document.getElementById('out_up'); b.style.display='block';
+                b.innerHTML = `<h4>تصویر 4K لوکنتراست:</h4><img src="data:image/png;base64,${d.image_base64}"><br><a class="btn btn-secondary" style="display:inline-block; margin-top:10px;" href="data:image/png;base64,${d.image_base64}" download="4k.png">⬇️ دانلود تصویر</a>`;
+            }
         }
     </script>
 </body>
@@ -333,6 +367,5 @@ def root():
     return HTML_PAGE
 
 if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
